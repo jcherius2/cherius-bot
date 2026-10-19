@@ -1,0 +1,10 @@
+# Direct dependencies, tested on Python 3.13 (2026-10-11). The workflow installs requirements.lock
+# (same versions plus every transitive dependency): regenerate it with pip freeze after any change here.
+forecasting-tools==0.3.4
+litellm==1.104.2
+openai==2.54.0
+pydantic==2.13.5
+python-dotenv==1.2.3
+requests==2.34.2
+# Tests only
+pytest==9.1.1

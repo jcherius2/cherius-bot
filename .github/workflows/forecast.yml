@@ -1,0 +1,85 @@
+name: Forecast
+
+on:
+  schedule:
+    - cron: "7,27,47 * * * *" # every 20 minutes, off the hour (same as the official template)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "tournament = FutureEval + MiniBench, test = bot-testing-area"
+        type: choice
+        options: [test, tournament]
+        default: test
+      dry_run:
+        description: "Run without publishing anything to Metaculus"
+        type: boolean
+        default: true
+
+# Only one run at a time; a new run waits for the current one instead of cancelling it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  forecast:
+    # Scheduled runs spend money and publish: they stay off until the repository
+    # variable BOT_ENABLED is set to true. Manual runs always work.
+    if: github.event_name == 'workflow_dispatch' || vars.BOT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      # The spending ledger (.budget/ledger.json) is carried from run to run by the cache.
+      - name: Restore the spending ledger
+        uses: actions/cache/restore@v4
+        with:
+          path: .budget
+          key: budget-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: budget-
+      - name: Install dependencies
+        run: pip install -r requirements.lock
+      - name: Run bot
+        env:
+          # Secrets (Settings > Secrets and variables > Actions > Secrets). Only the first two are needed by default.
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional repository variables (same page, Variables tab). Empty means "use the default".
+          BOT_PROFILE: ${{ vars.BOT_PROFILE }}
+          BOT_MODEL: ${{ vars.BOT_MODEL }}
+          BOT_RESEARCH_MODEL: ${{ vars.BOT_RESEARCH_MODEL }}
+          BOT_PARSER_MODEL: ${{ vars.BOT_PARSER_MODEL }}
+          BOT_MAX_USD_PER_RUN: ${{ vars.BOT_MAX_USD_PER_RUN }}
+          BOT_MAX_USD_TOTAL: ${{ vars.BOT_MAX_USD_TOTAL }}
+          BOT_USD_PER_MTOK_INPUT: ${{ vars.BOT_USD_PER_MTOK_INPUT }}
+          BOT_USD_PER_MTOK_OUTPUT: ${{ vars.BOT_USD_PER_MTOK_OUTPUT }}
+          PREDICTIONS_PER_QUESTION: ${{ vars.PREDICTIONS_PER_QUESTION }}
+          MAX_QUESTIONS_PER_RUN: ${{ vars.MAX_QUESTIONS_PER_RUN }}
+          LLM_MAX_TOKENS: ${{ vars.LLM_MAX_TOKENS }}
+          OPENAI_API_BASE: ${{ vars.OPENAI_API_BASE }}
+          # Scheduled runs have no inputs: they run the tournament and publish.
+          RUN_MODE: ${{ inputs.mode || 'tournament' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python main.py --mode "$RUN_MODE" --dry-run
+          else
+            python main.py --mode "$RUN_MODE"
+          fi
+      - name: Save the spending ledger
+        if: always() && hashFiles('.budget/ledger.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .budget
+          key: budget-${{ github.run_id }}-${{ github.run_attempt }}
