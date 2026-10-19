@@ -765,7 +765,11 @@ def build_bot(
     researcher = BudgetedLlm(
         model=research_model_name(), timeout=timeout, allowed_tries=2, max_tokens=max_tokens
     )
-    parser = BudgetedLlm(model=parser_model_name(), timeout=60, allowed_tries=2, temperature=0)
+    # Every model gets max_tokens: without it OpenRouter reserves the model's maximum output
+    # (64,000 tokens for Haiku 4.5) and refuses the call (402) when credits run low.
+    parser = BudgetedLlm(
+        model=parser_model_name(), timeout=60, allowed_tries=2, temperature=0, max_tokens=max_tokens
+    )
     return CheriusBot(
         research_reports_per_question=1,
         predictions_per_research_report=_env_int("PREDICTIONS_PER_QUESTION", profile()["draws"]),

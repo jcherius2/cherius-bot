@@ -170,6 +170,13 @@ def make_bot(publish: bool, skip: bool = True):
     return bot_module.build_bot(publish=publish, skip_previously_forecasted=skip, metaculus_client=client), client
 
 
+def test_every_model_caps_its_output(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_TOKENS", "1234")
+    bot, _ = make_bot(publish=False)
+    for role in ("default", "researcher", "parser", "summarizer"):
+        assert bot.get_llm(role, "llm").litellm_kwargs["max_tokens"] == 1234, role
+
+
 def published_calls(client) -> list[str]:
     return [name for name, _, _ in client.method_calls if name.startswith("post_")]
 
