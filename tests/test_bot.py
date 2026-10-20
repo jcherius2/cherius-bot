@@ -440,7 +440,9 @@ def test_a_402_defers_every_question_and_the_run_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(bot_module, "build_bot", lambda **kw: real_build(**kw, metaculus_client=client))
     assert bot_module.main(["--mode", "tournament"]) == 0
     assert published_calls(client) == []
-    assert "Provider credits exhausted (HTTP 402)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Provider credits exhausted (HTTP 402)" in out
+    assert "::notice title=CheriusBot::mode=tournament publish=True" in out and "forecasts=0 failures=0 deferred=5" in out
     ledger = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["done"] == {} and all(count == 0 for count in ledger["attempts"].values())
     assert len(calls) <= bot_module.CheriusBot.max_concurrent_questions * 2  # no new question after the 402

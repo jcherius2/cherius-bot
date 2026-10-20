@@ -997,6 +997,12 @@ def main(argv: list[str] | None = None) -> int:
         ledger.run_usd,
         ledger.total_usd + ledger.run_usd,
     )
+    # Run summary as an annotation: shown on the public run page, where the logs need a sign-in.
+    print(
+        f"::notice title=CheriusBot::mode={args.mode} publish={not args.dry_run} model={forecast_model_name()} "
+        f"forecasts={successes} failures={failures} deferred={deferred} "
+        f"run_usd={ledger.run_usd:.4f} season_usd={ledger.total_usd + ledger.run_usd:.2f}"
+    )
     if bot.credits_exhausted:
         print("::warning title=CheriusBot::Provider credits exhausted (HTTP 402): questions deferred, top up the key.")
         logger.warning("CREDITS EXHAUSTED: the provider answered 402; %d question(s) deferred to a later run", deferred)
