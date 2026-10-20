@@ -93,10 +93,10 @@ failed run shows red in Actions. Questions put off for lack of budget or time ar
 
 | Variable | Default | Role |
 | --- | --- | --- |
-| `BOT_PROFILE` | `cheap` | `cheap`: `openrouter/anthropic/claude-haiku-4.5`, 2 draws. `full`: `openrouter/anthropic/claude-opus-5.5`, 3 draws |
+| `BOT_PROFILE` | `cheap` | `cheap`: `openrouter/anthropic/claude-haiku-5.5`, 2 draws. `full`: `openrouter/anthropic/claude-opus-5.5`, 3 draws |
 | `BOT_MODEL` | from the profile | Forecasts |
 | `BOT_RESEARCH_MODEL` | `BOT_MODEL` + `:online` (OpenRouter only) | Research with web search |
-| `BOT_PARSER_MODEL` | `openrouter/anthropic/claude-haiku-4.5` | Only used when an answer does not follow the format |
+| `BOT_PARSER_MODEL` | `openrouter/anthropic/claude-haiku-5.5` | Only used when an answer does not follow the format |
 
 Model names use the litellm format. The key that must be set depends on the prefix:
 `openrouter/...` needs `OPENROUTER_API_KEY`; `openai/...` needs `OPENAI_API_KEY` and, for any
@@ -109,7 +109,7 @@ could not be checked against the live OpenRouter catalogue before the first run.
 
 Estimates, not measurements. One question costs one research call and
 `PREDICTIONS_PER_QUESTION` forecast calls, plus about $0.02 of OpenRouter web search:
-roughly $0.05 to $0.08 in the `cheap` profile, $0.30 to $0.50 in the `full` profile. A season
+roughly $0.02 to $0.04 in the `cheap` profile (mostly web search: Haiku 5.5 is $0.10 / $0.50 per million tokens), $0.30 to $0.50 in the `full` profile. A season
 has 300 to 400 tournament questions plus about 60 MiniBench questions every two weeks.
 
 Spending caps, from the strongest to the weakest:

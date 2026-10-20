@@ -66,8 +66,8 @@ TEST_TOURNAMENT_ID = "bot-testing-area"
 # the starting 55 EUR only; "full" is for when model credits are granted.
 # usd_in / usd_out: fallback prices per million tokens, used when the provider reports no cost.
 PROFILES: dict[str, dict] = {
-    "cheap": {"model": "openrouter/anthropic/claude-haiku-4.5", "draws": 2, "usd_in": 1.0, "usd_out": 5.0},
-    "full": {"model": "openrouter/anthropic/claude-opus-5.5", "draws": 3, "usd_in": 5.0, "usd_out": 25.0},
+    "cheap": {"model": "openrouter/anthropic/claude-haiku-5.5", "draws": 2, "usd_in": 0.1, "usd_out": 0.5},
+    "full": {"model": "openrouter/anthropic/claude-opus-5.5", "draws": 3, "usd_in": 4.0, "usd_out": 20.0},
 }
 DEFAULT_PROFILE = "cheap"
 DEFAULT_MODEL = PROFILES[DEFAULT_PROFILE]["model"]
@@ -83,7 +83,7 @@ PROVIDER_KEYS = {
     "metaculus/": "METACULUS_TOKEN",  # Metaculus proxy, when Metaculus grants credits that way
 }
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
-DEFAULT_PARSER_MODEL = "openrouter/anthropic/claude-haiku-4.5"
+DEFAULT_PARSER_MODEL = "openrouter/anthropic/claude-haiku-5.5"
 ONLINE_SUFFIX = ":online"  # OpenRouter web-search variant of a model
 
 MIN_BINARY_PROBABILITY = 0.02
@@ -258,6 +258,26 @@ def is_budget_error(error: BaseException | None, depth: int = 0) -> bool:
         return True
     children = list(getattr(error, "exceptions", ())) + [error.__cause__, error.__context__]
     return any(is_budget_error(child, depth + 1) for child in children)
+
+
+# OpenRouter answers 402 when the key lacks credits (or the in-flight reservation fails).
+# litellm may wrap it, and forecasting-tools may stringify it: match the status and the
+# known messages, never a bare "402" (a question URL can contain it).
+PAYMENT_REQUIRED = re.compile(
+    r"(error code|status[_ ]code|\"code\")\s*[:=]?\s*402\b|402 payment required|payment required"
+    r"|insufficient credits|requires more credits|can only afford|in_flight_budget_exhausted",
+    re.IGNORECASE,
+)
+
+
+def is_payment_required(error: BaseException | None, depth: int = 0) -> bool:
+    """True if the error, or one it wraps, is a provider refusal for lack of credits (HTTP 402)."""
+    if error is None or depth > 6:
+        return False
+    if getattr(error, "status_code", None) == 402 or PAYMENT_REQUIRED.search(str(error)):
+        return True
+    children = list(getattr(error, "exceptions", ())) + [error.__cause__, error.__context__]
+    return any(is_payment_required(child, depth + 1) for child in children)
 
 
 class BudgetedLlm(GeneralLlm):
@@ -448,6 +468,7 @@ class CheriusBot(ForecastBot):
     ledger: Ledger | None = None
     meter: MonetaryCostManager | None = None  # set by run(): the allowance of this run
     deadline: float | None = None  # time.monotonic() after which no new question starts
+    credits_exhausted: bool = False  # set on the first 402: no new question starts in this run
     _slots: asyncio.Semaphore | None = None
     _slots_loop: object | None = None
 
@@ -468,6 +489,8 @@ class CheriusBot(ForecastBot):
             return "run allowance spent"
         if self.deadline is not None and time.monotonic() > self.deadline:
             return "run time budget spent"
+        if self.credits_exhausted:
+            return "provider credits exhausted (HTTP 402 earlier in this run)"
         return None
 
     async def _run_individual_question(self, question: MetaculusQuestion):
@@ -485,8 +508,15 @@ class CheriusBot(ForecastBot):
             try:
                 report = await super()._run_individual_question(question)
             except Exception as error:
-                if is_budget_error(error):  # not the question's fault: do not count the attempt
+                payment_required = is_payment_required(error)
+                if payment_required:
+                    if not self.credits_exhausted:
+                        logger.warning("HTTP 402 from the provider (no credits): remaining questions are deferred")
+                    self.credits_exhausted = True
+                    self.deferred[key] = "provider refused the call for lack of credits (HTTP 402)"
+                elif is_budget_error(error):
                     self.deferred[key] = "run allowance reached during the question"
+                if payment_required or is_budget_error(error):  # not the question's fault: do not count it
                     if self.ledger is not None:
                         self.ledger.attempts[key] = max(0, self.ledger.attempts.get(key, 1) - 1)
                 raise
@@ -876,7 +906,7 @@ async def run(
     logger.info("%d question(s) to forecast in mode %s", len(questions), mode)
     if not questions:
         return 0, failures, 0
-    bot.ledger, bot.deferred = ledger, {}
+    bot.ledger, bot.deferred, bot.credits_exhausted = ledger, {}, False
     bot.deadline = time.monotonic() + _env_int("BOT_RUN_SECONDS", 900)
     with MonetaryCostManager(allowance or 0) as meter:  # 0 means "no limit" for the package
         bot.meter = meter
@@ -967,6 +997,9 @@ def main(argv: list[str] | None = None) -> int:
         ledger.run_usd,
         ledger.total_usd + ledger.run_usd,
     )
+    if bot.credits_exhausted:
+        print("::warning title=CheriusBot::Provider credits exhausted (HTTP 402): questions deferred, top up the key.")
+        logger.warning("CREDITS EXHAUSTED: the provider answered 402; %d question(s) deferred to a later run", deferred)
     return 1 if failures else 0
 
 

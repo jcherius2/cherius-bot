@@ -95,6 +95,7 @@ DATE_ANSWER = "Reasoning.\nFINAL ANSWER\n" + "\n".join(
     f"Percentile {p}: {v}" for p, v in zip(bot_module.NUMERIC_PERCENTILES, DATE_VALUES)
 )
 CALL_TOKENS = (1000, 500)  # prompt and completion tokens reported by the fake model, with no cost
+CHEAP = bot_module.PROFILES["cheap"]  # default profile: its fallback prices price CALL_TOKENS
 
 
 class FakeLlm:
@@ -394,6 +395,57 @@ def test_a_failed_research_fails_the_question_without_publishing(monkeypatch):
     assert published_calls(client) == []
 
 
+class PaymentRequired(Exception):
+    """Shape of the litellm error for an OpenRouter 402 (status_code attribute)."""
+
+    status_code = 402
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (PaymentRequired("OpenrouterException"), True),
+        (ValueError('Errors: [\'{"error":{"message":"can only afford 2899 tokens","code":402}}\']'), True),
+        (RuntimeError("Error code: 402 - in_flight_budget_exhausted"), True),
+        (ValueError("failed for https://www.metaculus.com/questions/402/ and /40213/"), False),
+        (ValueError("Error code: 429 - rate limited"), False),
+    ],
+)
+def test_payment_required_detection(error, expected):
+    assert bot_module.is_payment_required(error) is expected
+    wrapped = RuntimeError("All 1 research reports/predictions failed")
+    wrapped.__cause__ = error
+    assert bot_module.is_payment_required(wrapped) is expected
+
+
+def test_a_402_defers_every_question_and_the_run_ends_cleanly(monkeypatch, tmp_path, capsys):
+    import dotenv
+
+    calls = []
+
+    async def invoke(llm, prompt, *args, **kwargs):
+        calls.append(llm.model)
+        raise PaymentRequired("OpenrouterException - This request requires more credits")
+
+    monkeypatch.setattr(GeneralLlm, "invoke", invoke)
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setenv("METACULUS_TOKEN", "placeholder")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    client = MagicMock()
+    client.get_all_open_questions_from_tournament.return_value = [
+        binary_question(id_of_question=n, id_of_post=n, page_url=f"https://www.metaculus.com/questions/{n}/")
+        for n in (101, 102, 103, 104, 105)
+    ]
+    real_build = bot_module.build_bot
+    monkeypatch.setattr(bot_module, "build_bot", lambda **kw: real_build(**kw, metaculus_client=client))
+    assert bot_module.main(["--mode", "tournament"]) == 0
+    assert published_calls(client) == []
+    assert "Provider credits exhausted (HTTP 402)" in capsys.readouterr().out
+    ledger = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["done"] == {} and all(count == 0 for count in ledger["attempts"].values())
+    assert len(calls) <= bot_module.CheriusBot.max_concurrent_questions * 2  # no new question after the 402
+
+
 # ---------------------------------- CLI ---------------------------------- #
 def test_command_line_arguments():
     assert bot_module.parse_args([]).mode == "tournament"
@@ -488,14 +540,15 @@ def test_test_mode_takes_few_questions_of_varied_types(llm):
 
 # --------------------------------- budget -------------------------------- #
 def test_profiles_and_fallback_prices(monkeypatch):
-    assert bot_module.fallback_prices() == (1.0, 5.0)
+    cheap, full = bot_module.PROFILES["cheap"], bot_module.PROFILES["full"]
+    assert bot_module.fallback_prices() == (cheap["usd_in"], cheap["usd_out"])
     monkeypatch.setenv("BOT_PROFILE", "full")
     assert bot_module.forecast_model_name() == bot_module.PROFILES["full"]["model"]
     assert make_bot(publish=False)[0].predictions_per_research_report == 3
     monkeypatch.setenv("BOT_PROFILE", "nonsense")
     assert bot_module.forecast_model_name() == bot_module.DEFAULT_MODEL
     monkeypatch.setenv("BOT_MODEL", "openrouter/some/model")  # unknown price: assume the expensive class
-    assert bot_module.fallback_prices() == (5.0, 25.0)
+    assert bot_module.fallback_prices() == (full["usd_in"], full["usd_out"])
     monkeypatch.setenv("BOT_USD_PER_MTOK_INPUT", "0.3")
     monkeypatch.setenv("BOT_USD_PER_MTOK_OUTPUT", "2.5")
     assert bot_module.estimate_cost("m", 1_000_000, 1_000_000) == pytest.approx(2.8)
@@ -519,7 +572,7 @@ def test_unreported_costs_are_estimated_and_written_to_the_ledger(llm, tmp_path)
     ledger = bot_module.Ledger(str(tmp_path / "l.json"))
     ledger.total_usd = 2.0
     assert asyncio.run(bot_module.run(bot, "test", ledger, 1.0)) == (1, 0, 0)
-    one_call = CALL_TOKENS[0] / 1e6 * 1.0 + CALL_TOKENS[1] / 1e6 * 5.0
+    one_call = CALL_TOKENS[0] / 1e6 * CHEAP["usd_in"] + CALL_TOKENS[1] / 1e6 * CHEAP["usd_out"]
     assert ledger.run_usd == pytest.approx(3 * one_call + 0.02)  # research (with search fee) + 2 draws
     saved = json.loads((tmp_path / "l.json").read_text())
     assert saved["total_usd"] == pytest.approx(2.0 + ledger.run_usd)
@@ -544,14 +597,14 @@ def test_llm_refuses_to_call_over_the_limit(llm):
     model = bot_module.BudgetedLlm(model="openrouter/some/model", allowed_tries=1)
 
     async def spend() -> float:
-        with MonetaryCostManager(0.001) as meter:
+        with MonetaryCostManager(0.0001) as meter:
             await model._mockable_direct_call_to_model("Probability: ZZ%")
-            assert meter.current_usage > 0.001
+            assert meter.current_usage > 0.0001
             with pytest.raises(HardLimitExceededError):
                 await model._mockable_direct_call_to_model("Probability: ZZ%")
             return meter.current_usage
 
-    assert asyncio.run(spend()) == pytest.approx(CALL_TOKENS[0] / 1e6 * 1.0 + CALL_TOKENS[1] / 1e6 * 5.0)
+    assert asyncio.run(spend()) == pytest.approx(CALL_TOKENS[0] / 1e6 * CHEAP["usd_in"] + CALL_TOKENS[1] / 1e6 * CHEAP["usd_out"])
     assert bot_module.is_budget_error(RuntimeError("x: exceeding the hard limit of 1"))
     assert not bot_module.is_budget_error(ValueError("parse error"))
 
