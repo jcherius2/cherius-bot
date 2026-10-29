@@ -60,6 +60,8 @@ jobs:
           BOT_MODEL: ${{ vars.BOT_MODEL }}
           BOT_RESEARCH_MODEL: ${{ vars.BOT_RESEARCH_MODEL }}
           BOT_PARSER_MODEL: ${{ vars.BOT_PARSER_MODEL }}
+          BOT_SEARCH_ENGINE: ${{ vars.BOT_SEARCH_ENGINE }}
+          BOT_SEARCH_RESULTS: ${{ vars.BOT_SEARCH_RESULTS }}
           BOT_MAX_USD_PER_RUN: ${{ vars.BOT_MAX_USD_PER_RUN }}
           BOT_MAX_USD_TOTAL: ${{ vars.BOT_MAX_USD_TOTAL }}
           BOT_USD_PER_MTOK_INPUT: ${{ vars.BOT_USD_PER_MTOK_INPUT }}

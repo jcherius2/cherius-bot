@@ -85,6 +85,13 @@ PROVIDER_KEYS = {
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 DEFAULT_PARSER_MODEL = "openrouter/anthropic/claude-haiku-5.5"
 ONLINE_SUFFIX = ":online"  # OpenRouter web-search variant of a model
+# Web search of the research step. With ":online" alone, OpenRouter uses the provider's native
+# search for Anthropic models: the model runs as many searches as it likes ($0.01 each) and reads
+# the pages as input tokens. Measured from 21/10 to 26/10: about $0.12 per question, almost all of
+# it search (Haiku 5.5 tokens cost $0.10 / $0.50 per million). The Exa engine bills per request
+# (about $0.007 per search request; max_results only limits the tokens read). "native" restores the old way.
+DEFAULT_SEARCH_ENGINE = "exa"
+DEFAULT_SEARCH_RESULTS = 3
 
 MIN_BINARY_PROBABILITY = 0.02
 MAX_BINARY_PROBABILITY = 0.98
@@ -309,6 +316,22 @@ def research_model_name() -> str:
     if model.startswith("openrouter/") and not model.endswith(ONLINE_SUFFIX):
         return model + ONLINE_SUFFIX
     return model
+
+
+def web_search_plugin() -> dict | None:
+    """OpenRouter web plugin for the research call (BOT_SEARCH_ENGINE, BOT_SEARCH_RESULTS).
+
+    None keeps the plain ":online" behaviour: BOT_SEARCH_ENGINE=native, or a research model
+    that is not an OpenRouter ":online" model.
+    """
+    model = research_model_name()
+    if not (model.startswith("openrouter/") and model.endswith(ONLINE_SUFFIX)):
+        return None
+    engine = os.getenv("BOT_SEARCH_ENGINE", "").strip().lower() or DEFAULT_SEARCH_ENGINE
+    if engine == "native":
+        return None
+    results = max(1, _env_int("BOT_SEARCH_RESULTS", DEFAULT_SEARCH_RESULTS))
+    return {"id": "web", "engine": engine, "max_results": results}
 
 
 def parser_model_name() -> str:
@@ -792,8 +815,13 @@ def build_bot(
     forecaster = BudgetedLlm(
         model=forecast_model_name(), timeout=timeout, allowed_tries=2, max_tokens=max_tokens
     )
+    plugin = web_search_plugin()
     researcher = BudgetedLlm(
-        model=research_model_name(), timeout=timeout, allowed_tries=2, max_tokens=max_tokens
+        model=research_model_name(),
+        timeout=timeout,
+        allowed_tries=2,
+        max_tokens=max_tokens,
+        **({"extra_body": {"plugins": [plugin]}} if plugin else {}),
     )
     # Every model gets max_tokens: without it OpenRouter reserves the model's maximum output
     # (64,000 tokens for Haiku 4.5) and refuses the call (402) when credits run low.
@@ -975,11 +1003,12 @@ def main(argv: list[str] | None = None) -> int:
     # In the tournament a question is forecast once and never again. The test area may be re-forecast.
     bot = build_bot(publish=not args.dry_run, skip_previously_forecasted=(args.mode == "tournament"))
     logger.info(
-        "mode=%s publish=%s forecaster=%s researcher=%s draws=%d spent_so_far=$%.2f allowance_this_run=%s",
+        "mode=%s publish=%s forecaster=%s researcher=%s search=%s draws=%d spent_so_far=$%.2f allowance_this_run=%s",
         args.mode,
         not args.dry_run,
         forecast_model_name(),
         research_model_name(),
+        web_search_plugin() or "default",
         bot.predictions_per_research_report,
         ledger.total_usd,
         "unlimited" if allowance is None else f"${allowance:.2f}",

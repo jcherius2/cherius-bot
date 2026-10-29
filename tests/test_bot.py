@@ -178,6 +178,23 @@ def test_every_model_caps_its_output(monkeypatch):
         assert bot.get_llm(role, "llm").litellm_kwargs["max_tokens"] == 1234, role
 
 
+def test_research_search_is_capped_by_default(monkeypatch):
+    bot, _ = make_bot(publish=False)
+    extra = bot.get_llm("researcher", "llm").litellm_kwargs["extra_body"]
+    assert extra == {"plugins": [{"id": "web", "engine": "exa", "max_results": 3}]}
+    assert "extra_body" not in bot.get_llm("default", "llm").litellm_kwargs
+    monkeypatch.setenv("BOT_SEARCH_RESULTS", "5")
+    assert bot_module.web_search_plugin()["max_results"] == 5
+    monkeypatch.setenv("BOT_SEARCH_RESULTS", "0")
+    assert bot_module.web_search_plugin()["max_results"] == 1
+    monkeypatch.setenv("BOT_SEARCH_ENGINE", "native")
+    assert bot_module.web_search_plugin() is None
+    assert "extra_body" not in make_bot(publish=False)[0].get_llm("researcher", "llm").litellm_kwargs
+    monkeypatch.delenv("BOT_SEARCH_ENGINE")
+    monkeypatch.setenv("BOT_RESEARCH_MODEL", "openrouter/other/searcher")  # no ":online": not touched
+    assert bot_module.web_search_plugin() is None
+
+
 def published_calls(client) -> list[str]:
     return [name for name, _, _ in client.method_calls if name.startswith("post_")]
 

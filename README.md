@@ -63,7 +63,7 @@ The Metaculus community prediction is never read or used.
    schedule (every 20 minutes) runs the tournament mode. Delete the variable to pause the bot.
 
 Optional variables (same Variables tab): `BOT_PROFILE`, `BOT_MODEL`, `BOT_RESEARCH_MODEL`,
-`BOT_PARSER_MODEL`, `BOT_MAX_USD_PER_RUN`, `BOT_MAX_USD_TOTAL`, `BOT_USD_PER_MTOK_INPUT`,
+`BOT_PARSER_MODEL`, `BOT_SEARCH_ENGINE`, `BOT_SEARCH_RESULTS`, `BOT_MAX_USD_PER_RUN`, `BOT_MAX_USD_TOTAL`, `BOT_USD_PER_MTOK_INPUT`,
 `BOT_USD_PER_MTOK_OUTPUT`, `PREDICTIONS_PER_QUESTION`, `MAX_QUESTIONS_PER_RUN`,
 `LLM_MAX_TOKENS`, `OPENAI_API_BASE`.
 
@@ -96,6 +96,8 @@ failed run shows red in Actions. Questions put off for lack of budget or time ar
 | `BOT_PROFILE` | `cheap` | `cheap`: `openrouter/anthropic/claude-haiku-5.5`, 2 draws. `full`: `openrouter/anthropic/claude-opus-5.5`, 3 draws |
 | `BOT_MODEL` | from the profile | Forecasts |
 | `BOT_RESEARCH_MODEL` | `BOT_MODEL` + `:online` (OpenRouter only) | Research with web search |
+| `BOT_SEARCH_ENGINE` | `exa` | OpenRouter web plugin engine for the `:online` research call; `native` lets the provider search freely (about 10-15 times dearer per question) |
+| `BOT_SEARCH_RESULTS` | `3` | Web results per research call with the `exa` engine (flat $0.007 per search, up to 10 results included) |
 | `BOT_PARSER_MODEL` | `openrouter/anthropic/claude-haiku-5.5` | Only used when an answer does not follow the format |
 
 Model names use the litellm format. The key that must be set depends on the prefix:
